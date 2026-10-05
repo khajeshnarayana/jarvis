@@ -433,6 +433,15 @@ EXEMPT = {
         "were written on a turn the taint gate had already found clean, and "
         "no note text is ever in the reply. Covered by "
         "tests/test_obsidian_store.py"),
+    "server.tool_obsidian_log": (
+        "`project` and `title` are the BRAIN's own tool arguments. The title "
+        "is never printed; the project is printed only as `result.project`, "
+        "the one `clean_name`d folder component the log went into (whose "
+        "words are the words the brain asked for), through `_plain_phrase`, "
+        "and the path through `_safe_label`. `action`, `kind` and `date` are "
+        "fixed values or a validated calendar date. It is an acting tool and "
+        "no note text is ever in the reply. Covered by "
+        "tests/test_obsidian_logs.py"),
 
     # --- the sanitisers themselves ---------------------------------------
     "server._said_name": (

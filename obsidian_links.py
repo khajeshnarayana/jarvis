@@ -20,6 +20,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+import obsidian_markdown as md
+
 NOTE_SUFFIX = ".md"
 RELATED_HEADING = "## Related"
 MAX_LINKS_PER_SAVE = 3
@@ -28,8 +30,6 @@ MAX_LINKS_PER_SAVE = 3
 _WIKILINK = re.compile(r"\[\[([^\[\]|\n]*?)(?:\|[^\[\]\n]*)?\]\]")
 # A name that would break the syntax it is written into, or a line.
 _LINK_UNSAFE = re.compile(r"[\[\]|#^\n\r]")
-_HEADING = re.compile(r"(#{1,6})[ \t]+(.*?)[ \t#]*\Z")
-_FENCE = re.compile(r"[ \t]{0,3}(`{3,}|~{3,})")
 _WORD = re.compile(r"\w+")
 
 # Words that do not make two notes related on their own. A shared one adds a
@@ -87,48 +87,8 @@ def links_to(text: str, path: str) -> bool:
 
 # --- the Related section -----------------------------------------------------
 
-def _line_ending(text: str) -> str:
-    return "\r\n" if "\r\n" in text else "\n"
-
-
-def _headings(lines: list[str]) -> list[tuple[int, int, str]]:
-    """(line index, level, text) of every heading outside a code fence."""
-    out, fence = [], None
-    for i, line in enumerate(lines):
-        bare = line.rstrip("\r\n")
-        f = _FENCE.match(bare)
-        if f:
-            mark = f.group(1)[0]
-            if fence is None:
-                fence = mark
-            elif fence == mark:
-                fence = None
-            continue
-        if fence is not None:
-            continue
-        h = _HEADING.match(bare)
-        if h:
-            out.append((i, len(h.group(1)), h.group(2).strip()))
-    return out
-
-
 def _related_span(lines: list[str]) -> tuple[int, int] | None | bool:
-    """(first line after the heading, end) of the one Related section; None
-    if there is none; False if there is more than one, which is the user's
-    structure to sort out, not ours."""
-    heads = _headings(lines)
-    found = [(i, lvl) for i, lvl, t in heads if lvl == 2 and t.casefold() == "related"]
-    if len(found) > 1:
-        return False
-    if not found:
-        return None
-    start, _ = found[0]
-    end = len(lines)
-    for i, lvl, _t in heads:
-        if i > start and lvl <= 2:
-            end = i
-            break
-    return start + 1, end
+    return md.section_span(lines, "Related")
 
 
 def related_is_last(text: str) -> int | None:
@@ -148,7 +108,7 @@ def add_related(text: str, links: list[str]) -> str | None:
     structure is not one this will touch (two Related sections)."""
     if not links:
         return text
-    eol = _line_ending(text)
+    eol = md.line_ending(text)
     lines = text.splitlines(keepends=True)
     span = _related_span(lines)
     if span is False:

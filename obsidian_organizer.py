@@ -193,9 +193,11 @@ def title_for(title, content: str) -> str:
     return "Untitled note"
 
 
-def _project_folder(project: str) -> str:
+def project_folder(project: str) -> str:
     """The existing project folder whose name IS this project, else the
-    cleaned name for a new one."""
+    cleaned name for a new one. `project` is already `clean_name`d. Only
+    real, visible folders are candidates (`ov.list_folders`), so a symlinked
+    project folder is never the one chosen."""
     key = subject_key(project)
     for name in ov.list_folders(PROJECTS):
         if key and subject_key(name) == key:
@@ -236,7 +238,7 @@ def store(content, category=None, title=None, project=None) -> StoreResult:
     folder = CATEGORY_FOLDERS[kind]
     drop: frozenset = frozenset()
     if kind == "project":
-        project_dir = _project_folder(project_name)
+        project_dir = project_folder(project_name)
         folder = f"{folder}/{project_dir}"
         # Inside a project's folder the project's own name says nothing:
         # "JARVIS Runtime" and "Runtime" in 01 Projects/JARVIS are one note.

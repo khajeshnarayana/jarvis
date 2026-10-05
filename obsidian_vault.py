@@ -48,6 +48,10 @@ class VaultError(Exception):
     """Something this module refuses to do. The message is speakable."""
 
 
+class NoteExists(VaultError):
+    """`create_unlinked_note` found the note already there."""
+
+
 def vault_root() -> Path:
     """The real path of the configured vault, or raise `VaultError`."""
     raw = (os.getenv("OBSIDIAN_VAULT_PATH") or "").strip()
@@ -227,7 +231,8 @@ def list_folders(path: str) -> list[str]:
 # ---------------------------------------------------------------------------
 #
 # Not a tool. The organizer uses it to add links to a `## Related` section,
-# and nothing else may: there is no MCP route to whole-note replacement.
+# and `obsidian_logs` to add an entry to a log's own section; nothing else
+# may: there is no MCP route to whole-note replacement.
 #
 # Compare-and-swap: the caller reads the note and its digest, builds the new
 # text, and hands both back. The note is re-read immediately before the swap
@@ -297,6 +302,37 @@ def update_note(path: str, text: str, expected_digest: str) -> str:
     finally:
         if os.path.lexists(tmp):
             os.unlink(tmp)
+    return _shown(root, target)
+
+
+def create_unlinked_note(path: str, text: str) -> str:
+    """Create a NEW note, making missing folders one at a time, refusing if
+    any folder on the way — or the note itself — is a symlink, even one that
+    stays inside the vault. `update_note`'s rule, for a note that does not
+    exist yet. Never overwrites: the note is opened with O_EXCL."""
+    root, parts = _lexical(path, note=True)
+    _resolve(path, note=True)                      # the usual containment
+    data = text.encode("utf-8")
+    if len(data) > MAX_READ_BYTES:
+        raise VaultError("That would make the note too large.")
+    folder = root
+    for part in parts[:-1]:
+        folder = folder / part
+        try:
+            os.mkdir(folder)
+        except FileExistsError:
+            pass
+        if os.path.islink(folder) or not folder.is_dir():
+            raise VaultError(f"{_shown(root, folder)} is not a plain folder, "
+                             "so I will not write inside it.")
+    target = folder / parts[-1]
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    except FileExistsError:
+        raise NoteExists(f"{_shown(root, target)} already exists, "
+                         "so I have not touched it.") from None
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
     return _shown(root, target)
 
 

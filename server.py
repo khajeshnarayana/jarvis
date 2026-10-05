@@ -66,6 +66,7 @@ from pydantic import BaseModel
 
 import actions
 import builds
+import obsidian_logs
 import obsidian_organizer
 import obsidian_vault
 from work_mode import is_casual_question
@@ -2411,6 +2412,12 @@ TAINT_EXEMPT_TOOLS = {
     "obsidian_store": (
         "it saves into the vault and says back only what it did and where; "
         "the notes it checks to decide are never shown to the brain"),
+    # The same: it reads the one log note it is about to write, to find its
+    # section and whether this entry is already there, and says back only
+    # what it did and where. That note's text never reaches the brain.
+    "obsidian_log": (
+        "it adds an entry to a daily note or project log and says back only "
+        "what it did and where; the note it checks is never shown to the brain"),
 }
 
 # Acting tools that only ever bring back MORE content to read. They are gated
@@ -6458,6 +6465,39 @@ async def tool_obsidian_store(args: dict) -> str:
             f"reason: {_safe_label(result.reason, _OBSIDIAN_SAID_LIMIT)}")
 
 
+# `obsidian_log` is the chronological sibling of `obsidian_store`, under the
+# same rule: an acting tool behind both gates, and a reply made only of what
+# it did and a path built from its own arguments. The project is printed as
+# the folder the log went into, which is one `clean_name`d component whose
+# words are the words the brain asked for.
+_LOG_SAID = {
+    "created": "Logged in a new Obsidian note, sir.",
+    "appended": "Logged in Obsidian, sir.",
+    "unchanged": "That is already in that log, sir; nothing was added.",
+}
+
+
+async def tool_obsidian_log(args: dict) -> str:
+    """Add one entry to a daily note or a project's development log."""
+    try:
+        result = await asyncio.to_thread(
+            obsidian_logs.log, args.get("content"), args.get("kind"),
+            args.get("project"), args.get("date"), args.get("title"))
+    except obsidian_vault.VaultError as e:
+        return ("Not logged, sir.\naction: refused\n"
+                f"reason: {_safe_label(str(e), _OBSIDIAN_SAID_LIMIT)}")
+    # A short phrase or nothing: an existing folder's name is the vault's
+    # text, so it gets the phrase wall (a long one is still in the path).
+    project = (_plain_phrase(result.project, "see path")
+               if result.project is not None else "none")
+    return (f"{_LOG_SAID[result.action]}\n"
+            f"action: {_plain_name(result.action, 'unknown')}\n"
+            f"kind: {_plain_name(result.kind, 'unknown')}\n"
+            f"project: {project}\n"
+            f"date: {_plain_name(result.date, 'unknown')}\n"
+            f"path: {_safe_label(result.path, _OBSIDIAN_SAID_LIMIT)}")
+
+
 TOOL_HANDLERS.update({
     "obsidian_create_folder": tool_obsidian_create_folder,
     "obsidian_create_note": tool_obsidian_create_note,
@@ -6465,9 +6505,10 @@ TOOL_HANDLERS.update({
     "obsidian_read": tool_obsidian_read,
     "obsidian_search": tool_obsidian_search,
     "obsidian_store": tool_obsidian_store,
+    "obsidian_log": tool_obsidian_log,
 })
 ACTING_TOOLS.update({"obsidian_create_folder", "obsidian_create_note",
-                     "obsidian_append", "obsidian_store"})
+                     "obsidian_append", "obsidian_store", "obsidian_log"})
 
 
 @app.websocket("/ws/sessions")
