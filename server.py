@@ -66,6 +66,7 @@ from pydantic import BaseModel
 
 import actions
 import builds
+import obsidian_organizer
 import obsidian_vault
 from work_mode import is_casual_question
 import preflight
@@ -2402,6 +2403,14 @@ TAINT_EXEMPT_TOOLS = {
     "obsidian_create_folder": "it makes a folder in the vault, it does not read",
     "obsidian_create_note": "it writes a new note in the vault, it does not read",
     "obsidian_append": "it appends to a note in the vault, it does not read",
+    # It DOES look at the vault, to find the note a save belongs in — but
+    # inside the handler, and none of it is handed to the brain: the reply is
+    # the action, the category, a fixed reason, and a path built from the
+    # brain's own arguments (see the trust boundary in obsidian_organizer).
+    # No foreign text reaches the context, so there is nothing to taint.
+    "obsidian_store": (
+        "it saves into the vault and says back only what it did and where; "
+        "the notes it checks to decide are never shown to the brain"),
 }
 
 # Acting tools that only ever bring back MORE content to read. They are gated
@@ -6413,15 +6422,47 @@ async def tool_obsidian_search(args: dict) -> str:
             f"enough:\n{_wrap_untrusted(_OBSIDIAN_SEARCH_WRAP_NAME, body)}")
 
 
+# `obsidian_store` is an ordinary acting tool: the origin gate and the taint
+# gate in `/internal/tool` both run BEFORE it, unchanged. It is not a way
+# round `obsidian_search` -> `obsidian_append` being refused in one turn; it
+# is the same work done without the brain ever seeing the vault, which is
+# why it needs no exemption from anything. Keep it that way: nothing below
+# may put note text, or a vault path the organizer did not build from these
+# arguments, into the reply.
+_STORE_SAID = {
+    "created": "Saved to a new note in the Obsidian vault, sir.",
+    "appended": "Added to an existing note in the Obsidian vault, sir.",
+    "unchanged": "That is already in the Obsidian vault, sir; nothing was added.",
+}
+
+
+async def tool_obsidian_store(args: dict) -> str:
+    """Save what the user asked to keep, routed and de-duplicated."""
+    try:
+        result = await asyncio.to_thread(
+            obsidian_organizer.store, args.get("content"),
+            args.get("category"), args.get("title"), args.get("project"))
+    except obsidian_vault.VaultError as e:
+        return ("Not saved, sir.\naction: refused\n"
+                f"reason: {_safe_label(str(e), _OBSIDIAN_SAID_LIMIT)}")
+    return (f"{_STORE_SAID[result.action]}\n"
+            f"action: {_plain_name(result.action, 'unknown')}\n"
+            f"category: {_plain_name(result.category, 'unknown')}\n"
+            f"path: {_safe_label(result.path, _OBSIDIAN_SAID_LIMIT)}\n"
+            f"existing note: {'yes' if result.reused else 'no'}\n"
+            f"reason: {_safe_label(result.reason, _OBSIDIAN_SAID_LIMIT)}")
+
+
 TOOL_HANDLERS.update({
     "obsidian_create_folder": tool_obsidian_create_folder,
     "obsidian_create_note": tool_obsidian_create_note,
     "obsidian_append": tool_obsidian_append,
     "obsidian_read": tool_obsidian_read,
     "obsidian_search": tool_obsidian_search,
+    "obsidian_store": tool_obsidian_store,
 })
 ACTING_TOOLS.update({"obsidian_create_folder", "obsidian_create_note",
-                     "obsidian_append"})
+                     "obsidian_append", "obsidian_store"})
 
 
 @app.websocket("/ws/sessions")

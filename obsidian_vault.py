@@ -199,6 +199,22 @@ def read(path: str) -> tuple[str, str]:
     return shown, target.read_text(encoding="utf-8", errors="replace")
 
 
+def list_folders(path: str) -> list[str]:
+    """The names of the visible, real (non-symlink) folders directly inside a
+    vault folder, sorted. A missing folder has none."""
+    root, target = _resolve(path, note=False)
+    if not target.is_dir():
+        return []
+    names = []
+    with os.scandir(target) as entries:
+        for entry in entries:
+            if entry.name.startswith(".") or entry.is_symlink():
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                names.append(entry.name)
+    return sorted(names)
+
+
 # ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------

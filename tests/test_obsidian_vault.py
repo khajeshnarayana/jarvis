@@ -96,3 +96,15 @@ def test_server_gates_and_taint(vault, monkeypatch, tmp_path):
     assert 'untrusted="true"' in out and "hi" in out
     assert "outside" in server.tool_obsidian_read({"path": "../x"}) or \
         "climb" in server.tool_obsidian_read({"path": "../x"})
+
+
+def test_list_folders_is_visible_real_folders_only(vault, tmp_path):
+    for name in ("B", "a", ".hidden"):
+        (vault / "P" / name).mkdir(parents=True)
+    (vault / "P/file.md").write_text("x")
+    (vault / "P/link").symlink_to(tmp_path)
+    assert ov.list_folders("P") == ["B", "a"]
+    assert ov.list_folders("Missing") == []
+    for bad in ("../", ".obsidian", "/etc"):
+        with pytest.raises(ov.VaultError):
+            ov.list_folders(bad)

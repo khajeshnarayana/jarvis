@@ -79,6 +79,7 @@ ALLOWED_TOOLS = [
     "mcp__jarvis__obsidian_append",
     "mcp__jarvis__obsidian_read",
     "mcp__jarvis__obsidian_search",
+    "mcp__jarvis__obsidian_store",
     # The CLI's own two, and the only non-JARVIS tools here. JARVIS could read
     # a page he was handed the address of and nothing else — "look it up" had
     # no answer at all. Both were verified inside this exact flag set

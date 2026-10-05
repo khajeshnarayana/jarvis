@@ -424,6 +424,15 @@ EXEMPT = {
         "whole listing goes through `_wrap_untrusted(_WINDOWS_WRAP_NAME, …)` "
         "— the wrapper's name a literal, for the reason test_page_tools "
         "pins. Covered by tests/test_screen_tools.py"),
+    "server.tool_obsidian_store": (
+        "`title` and `project` here are the BRAIN's own tool arguments, not a "
+        "session's, and they are not printed: they go to "
+        "`obsidian_organizer.store`, which turns them into one filename-safe "
+        "component each, and the only thing printed is the resulting vault "
+        "path, through `_safe_label`. It is an acting tool, so those arguments "
+        "were written on a turn the taint gate had already found clean, and "
+        "no note text is ever in the reply. Covered by "
+        "tests/test_obsidian_store.py"),
 
     # --- the sanitisers themselves ---------------------------------------
     "server._said_name": (
