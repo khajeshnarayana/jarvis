@@ -433,6 +433,13 @@ EXEMPT = {
         "were written on a turn the taint gate had already found clean, and "
         "no note text is ever in the reply. Covered by "
         "tests/test_obsidian_store.py"),
+    "obsidian_logs.find_day": (
+        "`h.title` is a vault note's filename and it is never printed here: "
+        "it is only COMPARED with the date stamp this function built from "
+        "the local clock, to keep the hits named for that day. The hits go "
+        "back to `server.tool_obsidian_search`, which puts them inside "
+        "`_wrap_untrusted(_OBSIDIAN_SEARCH_WRAP_NAME, …)` like any other "
+        "search. Covered by tests/test_obsidian_retrieval.py"),
     "server.tool_obsidian_log": (
         "`project` and `title` are the BRAIN's own tool arguments. The title "
         "is never printed; the project is printed only as `result.project`, "

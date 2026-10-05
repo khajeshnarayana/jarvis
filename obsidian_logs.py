@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date as Date, datetime
+from datetime import date as Date, datetime, timedelta
 
 import obsidian_markdown as md
 import obsidian_organizer as org
@@ -89,6 +89,47 @@ def resolve_date(value, today: Date) -> Date:
     if day > today:
         raise ov.VaultError("I can only log for today or an earlier day.")
     return day
+
+
+def resolve_day(value, today: Date) -> Date:
+    """The day a question is about: "today", "yesterday", or a strict
+    `YYYY-MM-DD` that is today or earlier. Anything else is refused."""
+    word = " ".join(value.split()).casefold() if isinstance(value, str) else None
+    if word == "today":
+        return today
+    if word == "yesterday":
+        return today - timedelta(days=1)
+    if not word:
+        raise ov.VaultError('A day is "today", "yesterday" or YYYY-MM-DD.')
+    return resolve_date(value, today)
+
+
+# --- reading back -------------------------------------------------------------
+#
+# "What did we do yesterday on JARVIS?" is a search for the notes NAMED that
+# day: the daily note and any project's log. The day is resolved here, off
+# the same local clock the logs are written with, because the brain's own
+# idea of the date was fixed when it launched and is wrong after midnight.
+
+ARCHIVE = "99 Archive"
+
+
+@dataclass(frozen=True)
+class DayNotes:
+    day: Date
+    hits: list            # `ov.SearchHit`s whose note is named that day
+    truncated: bool
+
+
+def find_day(day, query: str = "", path: str = "") -> DayNotes:
+    """The notes named for `day` — its daily note and project logs — best
+    match for `query` first. A whole-vault search leaves out the archive."""
+    when = resolve_day(day, now().date())
+    stamp = when.isoformat()
+    result = ov.search(f"{stamp} {query or ''}", path, limit=ov.SEARCH_MAX_LIMIT,
+                       skip=(ARCHIVE,))
+    hits = [h for h in result.hits if h.title == stamp]
+    return DayNotes(when, hits, result.truncated)
 
 
 def _content_lines(content) -> list[str]:

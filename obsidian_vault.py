@@ -393,15 +393,25 @@ obsidian
 # The weights, strongest first. A title is what a note is ABOUT; a body
 # mention can be incidental, so no number of body hits on their own reaches
 # what a title containing the whole query earns.
+#
+# And the body is the part anyone can write: a clipped page, a pasted
+# transcript, a note that repeats the query fifty times to be found first.
+# So body evidence is PRESENCE, not frequency — a term found earns its
+# points once, a second occurrence one more and no further — and the whole
+# body contribution, phrase included, is capped below two title terms. A
+# note whose title or folder names two of the words always outranks one
+# that only says them, however often. The every-term bonus needs at least
+# one of them in the title or a folder for the same reason.
 _W_TITLE_EXACT = 100     # the title IS the query
 _W_TITLE_PHRASE = 60     # the query appears in the title, in order
 _W_TITLE_ALL = 40        # every term is in the title, any order
 _W_TITLE_TERM = 15       # per term in the title
 _W_FOLDER_TERM = 8       # per term in a folder name
-_W_BODY_PHRASE = 20      # the query appears in the body, in order
+_W_BODY_PHRASE = 12      # the query appears in the body, in order
 _W_BODY_TERM = 5         # per term in the body
-_W_BODY_REPEAT_MAX = 4   # extra, at most, for a term said again and again
-_W_ALL_TERMS = 10        # every term appears somewhere in the note
+_W_BODY_REPEAT_MAX = 1   # extra, at most, for a term said again and again
+_W_BODY_CAP = 20         # all body evidence together, phrase included
+_W_ALL_TERMS = 10        # every term appears somewhere, one in title or folder
 
 
 @dataclass(frozen=True)
@@ -469,18 +479,21 @@ def _score(terms, title_tokens, folder_tokens, body_tokens) -> int:
 
     counts = Counter(body_tokens)
     in_body = []
+    body = 0
     for term in terms:
         n = sum(c for w, c in counts.items() if _matches(term, w))
         if n:
             in_body.append(term)
-            score += _W_BODY_TERM + min(n - 1, _W_BODY_REPEAT_MAX)
+            body += _W_BODY_TERM + min(n - 1, _W_BODY_REPEAT_MAX)
     if _has_phrase(terms, body_tokens):
-        score += _W_BODY_PHRASE
+        body += _W_BODY_PHRASE
+    score += min(body, _W_BODY_CAP)
 
     found = set(in_title) | set(in_folders) | set(in_body)
     if not found:
         return 0
-    if len(terms) > 1 and len(found) == len(terms):
+    if (len(terms) > 1 and len(found) == len(terms)
+            and (in_title or in_folders)):
         score += _W_ALL_TERMS
     return score
 
@@ -524,12 +537,15 @@ def _excerpt(terms: list[str], body: str) -> str:
     return ("…" if start else "") + piece + ("…" if start + EXCERPT_CHARS < len(line) else "")
 
 
-def search(query: str, path: str = "", limit: int = SEARCH_DEFAULT_LIMIT) -> SearchResult:
+def search(query: str, path: str = "", limit: int = SEARCH_DEFAULT_LIMIT,
+           skip: tuple[str, ...] = ()) -> SearchResult:
     """The vault's Markdown notes that best match `query`, best first.
 
     `path` narrows the search to one folder inside the vault, checked exactly
-    as every other path is. Ties are broken by path, so the same vault and the
-    same query always give the same answer. Nothing is written.
+    as every other path is. `skip` names top-level folders a search of the
+    WHOLE vault does not enter (it has no effect on a scoped one). Ties are
+    broken by path, so the same vault and the same query always give the same
+    answer. Nothing is written.
     """
     terms = _query_terms(query)
     try:
@@ -538,8 +554,10 @@ def search(query: str, path: str = "", limit: int = SEARCH_DEFAULT_LIMIT) -> Sea
         limit = SEARCH_DEFAULT_LIMIT
     limit = max(1, min(limit, SEARCH_MAX_LIMIT))
 
+    skipped: frozenset = frozenset()
     if (path or "").strip() in ("", ".", "/"):
         root = start = vault_root()
+        skipped = frozenset(skip)
     else:
         root, start = _resolve(path, note=False)
         if not start.is_dir():
@@ -550,7 +568,8 @@ def search(query: str, path: str = "", limit: int = SEARCH_DEFAULT_LIMIT) -> Sea
     truncated = False
     # followlinks=False: a symlinked folder is listed but never entered.
     for dirpath, dirnames, filenames in os.walk(start, followlinks=False):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".")
+                             and not (dirpath == str(start) and d in skipped))
         for name in sorted(filenames):
             entries += 1
             if entries > SEARCH_MAX_ENTRIES or notes >= SEARCH_MAX_NOTES:

@@ -6408,25 +6408,53 @@ def _obsidian_search_lines(hits) -> tuple[str, int]:
 
 async def tool_obsidian_search(args: dict) -> str:
     """Candidate notes, best first, each with one line of context. Never a
-    whole note: `obsidian_read` is how the brain opens the one it wants."""
+    whole note: `obsidian_read` is how the brain opens the one it wants.
+
+    A search of the whole vault leaves `99 Archive` out; naming it as the
+    path is how to look there. With `day`, it looks for the notes NAMED that
+    day — the daily note and project logs — and falls back to an ordinary
+    search for `query` when there are none, saying so."""
+    query = str(args.get("query") or "")
+    path = str(args.get("path") or "")
+    day = args.get("day")
+    lead = ""
     try:
-        result = await asyncio.to_thread(
-            obsidian_vault.search, str(args.get("query") or ""),
-            str(args.get("path") or ""),
-            args.get("limit") or obsidian_vault.SEARCH_DEFAULT_LIMIT)
+        if day is not None and str(day).strip():
+            found = await asyncio.to_thread(obsidian_logs.find_day, day, query, path)
+            when = f"{found.day.strftime('%A')} {found.day.isoformat()}"
+            if found.hits:
+                hits, truncated = found.hits[:obsidian_vault.SEARCH_MAX_LIMIT], found.truncated
+                lead = f" from {when}"
+            else:
+                lead = (f" — there is no daily note or log for {when}, so these "
+                        f"are the closest matches instead")
+                result = await asyncio.to_thread(
+                    obsidian_vault.search, query, path,
+                    args.get("limit") or obsidian_vault.SEARCH_DEFAULT_LIMIT,
+                    (obsidian_logs.ARCHIVE,))
+                hits, truncated = result.hits, result.truncated
+                if not hits:
+                    return (f"There is no daily note or log for {when}, sir, "
+                            f"and nothing else in the Obsidian vault matches that.")
+        else:
+            result = await asyncio.to_thread(
+                obsidian_vault.search, query, path,
+                args.get("limit") or obsidian_vault.SEARCH_DEFAULT_LIMIT,
+                (obsidian_logs.ARCHIVE,))
+            hits, truncated = result.hits, result.truncated
     except obsidian_vault.VaultError as e:
         return _safe_label(str(e), _OBSIDIAN_SAID_LIMIT)
     # The query is not echoed, for `search_repo`'s reason: the brain knows
-    # what it asked.
+    # what it asked. The day is: it was resolved here, off this Mac's clock.
     partial = (" (the vault is larger than one search reads, so this is "
-               "only part of it)") if result.truncated else ""
-    if not result.hits:
+               "only part of it)") if truncated else ""
+    if not hits:
         return f"Nothing in the Obsidian vault matches that, sir{partial}."
-    body, shown = _obsidian_search_lines(result.hits)
+    body, shown = _obsidian_search_lines(hits)
     noun = "note" if shown == 1 else "notes"
-    return (f"{_say_number(shown).capitalize()} {noun} from the Obsidian vault, best match "
-            f"first{partial}. Open one with obsidian_read only if this is not "
-            f"enough:\n{_wrap_untrusted(_OBSIDIAN_SEARCH_WRAP_NAME, body)}")
+    return (f"{_say_number(shown).capitalize()} {noun} from the Obsidian vault{lead}, "
+            f"best match first{partial}. Open one with obsidian_read only if this "
+            f"is not enough:\n{_wrap_untrusted(_OBSIDIAN_SEARCH_WRAP_NAME, body)}")
 
 
 # `obsidian_store` is an ordinary acting tool: the origin gate and the taint
