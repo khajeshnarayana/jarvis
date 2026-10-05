@@ -70,6 +70,8 @@ def test_command_has_exact_flags(tmp_path):
         "mcp__jarvis__read_file,mcp__jarvis__open_in_editor,"
         "mcp__jarvis__remember,mcp__jarvis__recall,"
         "mcp__jarvis__project_note,mcp__jarvis__write_journal,"
+        "mcp__jarvis__obsidian_create_folder,mcp__jarvis__obsidian_create_note,"
+        "mcp__jarvis__obsidian_append,mcp__jarvis__obsidian_read,"
         # The CLI's own two, and the only built-ins here: without them JARVIS
         # can read a page he was given the address of and find nothing.
         "WebSearch,WebFetch")
@@ -84,6 +86,10 @@ def test_command_has_exact_flags(tmp_path):
 
 def test_model_defaults_to_sonnet_and_env_overrides(tmp_path, monkeypatch):
     import brain
+    # Importing `server` loads the developer's live .env into os.environ for
+    # good (outside any monkeypatch), so an earlier test file that imported it
+    # leaves JARVIS_BRAIN_MODEL set. The default is what is under test here.
+    monkeypatch.delenv("JARVIS_BRAIN_MODEL", raising=False)
     assert brain.BrainConfig.from_env(tmp_path).model == "sonnet"
     monkeypatch.setenv("JARVIS_BRAIN_MODEL", "haiku")
     assert brain.BrainConfig.from_env(tmp_path).model == "haiku"

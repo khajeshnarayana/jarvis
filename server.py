@@ -66,6 +66,7 @@ from pydantic import BaseModel
 
 import actions
 import builds
+import obsidian_vault
 from work_mode import is_casual_question
 import preflight
 import project_maker
@@ -2339,6 +2340,8 @@ TAINTING_TOOLS = {
     "search_repo": "a file in one of your projects",
     "repo_overview": "a file in one of your projects",
     "review_document": "a document in one of your projects",
+    # The vault holds whatever the user ever clipped or pasted into it.
+    "obsidian_read": "a note in your Obsidian vault",
     # Other people's conversations, and what they told their sessions.
     "list_sessions": "another session's transcript",
     "session_detail": "another session's transcript",
@@ -2395,6 +2398,9 @@ TAINT_EXEMPT_TOOLS = {
     "remember": "it writes a memory, it does not read",
     "project_note": "it writes a note, it does not read",
     "write_journal": "it writes the journal, it does not read",
+    "obsidian_create_folder": "it makes a folder in the vault, it does not read",
+    "obsidian_create_note": "it writes a new note in the vault, it does not read",
+    "obsidian_append": "it appends to a note in the vault, it does not read",
 }
 
 # Acting tools that only ever bring back MORE content to read. They are gated
@@ -6314,6 +6320,59 @@ TOOL_HANDLERS.update({
 # These three WRITE. A watcher-origin turn must never reach them, or text from
 # somebody else's transcript could plant a "fact" JARVIS then repeats as his own.
 ACTING_TOOLS.update({"remember", "project_note", "write_journal"})
+
+
+# ---------------------------------------------------------------------------
+# The Obsidian vault
+# ---------------------------------------------------------------------------
+#
+# Plain Markdown files under OBSIDIAN_VAULT_PATH; every path is confined by
+# `obsidian_vault`. The three writers are acting tools, so they run only on a
+# turn the user is driving, and not after the turn has read something foreign
+# (a web page cannot make JARVIS write into the vault). The reader taints:
+# the vault holds whatever the user ever clipped into it.
+
+_OBSIDIAN_WRAP_NAME = "obsidian note"
+
+
+def _obsidian_call(action, *args) -> str:
+    try:
+        return action(*args)
+    except obsidian_vault.VaultError as e:
+        return str(e)
+
+
+def tool_obsidian_create_folder(args: dict) -> str:
+    return _obsidian_call(obsidian_vault.create_folder, str(args.get("path") or ""))
+
+
+def tool_obsidian_create_note(args: dict) -> str:
+    return _obsidian_call(obsidian_vault.create_note, str(args.get("path") or ""),
+                          args.get("content"))
+
+
+def tool_obsidian_append(args: dict) -> str:
+    return _obsidian_call(obsidian_vault.append, str(args.get("path") or ""),
+                          args.get("content"))
+
+
+def tool_obsidian_read(args: dict) -> str:
+    try:
+        shown, text = obsidian_vault.read(str(args.get("path") or ""))
+    except obsidian_vault.VaultError as e:
+        return str(e)
+    return (f"{_safe_label(shown)}:\n"
+            f"{_wrap_untrusted(_OBSIDIAN_WRAP_NAME, text)}")
+
+
+TOOL_HANDLERS.update({
+    "obsidian_create_folder": tool_obsidian_create_folder,
+    "obsidian_create_note": tool_obsidian_create_note,
+    "obsidian_append": tool_obsidian_append,
+    "obsidian_read": tool_obsidian_read,
+})
+ACTING_TOOLS.update({"obsidian_create_folder", "obsidian_create_note",
+                     "obsidian_append"})
 
 
 @app.websocket("/ws/sessions")
