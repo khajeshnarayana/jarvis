@@ -72,6 +72,7 @@ def test_command_has_exact_flags(tmp_path):
         "mcp__jarvis__project_note,mcp__jarvis__write_journal,"
         "mcp__jarvis__obsidian_create_folder,mcp__jarvis__obsidian_create_note,"
         "mcp__jarvis__obsidian_append,mcp__jarvis__obsidian_read,"
+        "mcp__jarvis__obsidian_search,"
         # The CLI's own two, and the only built-ins here: without them JARVIS
         # can read a page he was given the address of and find nothing.
         "WebSearch,WebFetch")

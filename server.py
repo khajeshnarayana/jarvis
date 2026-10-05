@@ -2342,6 +2342,7 @@ TAINTING_TOOLS = {
     "review_document": "a document in one of your projects",
     # The vault holds whatever the user ever clipped or pasted into it.
     "obsidian_read": "a note in your Obsidian vault",
+    "obsidian_search": "a note in your Obsidian vault",
     # Other people's conversations, and what they told their sessions.
     "list_sessions": "another session's transcript",
     "session_detail": "another session's transcript",
@@ -6329,14 +6330,15 @@ ACTING_TOOLS.update({"remember", "project_note", "write_journal"})
 # Plain Markdown files under OBSIDIAN_VAULT_PATH; every path is confined by
 # `obsidian_vault`. The three writers are acting tools, so they run only on a
 # turn the user is driving, and not after the turn has read something foreign
-# (a web page cannot make JARVIS write into the vault). The reader taints:
-# the vault holds whatever the user ever clipped into it.
+# (a web page cannot make JARVIS write into the vault). The reader and the
+# search taint: the vault holds whatever the user ever clipped into it.
 #
 # What the vault module says back names the path the brain asked for, so it
 # goes through `_safe_label` before it reaches a line the brain reads as
 # JARVIS's own (tests/test_tool_argument_echo.py).
 
 _OBSIDIAN_WRAP_NAME = "obsidian note"
+_OBSIDIAN_SEARCH_WRAP_NAME = "obsidian search"
 _OBSIDIAN_SAID_LIMIT = 240
 
 
@@ -6371,11 +6373,52 @@ def tool_obsidian_read(args: dict) -> str:
             f"{_wrap_untrusted(_OBSIDIAN_WRAP_NAME, text)}")
 
 
+def _obsidian_search_lines(hits) -> tuple[str, int]:
+    """One entry per hit, as many as fit in the block whole: a cut entry is a
+    path the brain would try to read and not find."""
+    budget = _WRAP_CONTENT_CAP - 60
+    lines: list[str] = []
+    used = 0
+    for rank, hit in enumerate(hits, 1):
+        entry = f"{rank}. {hit.path}"
+        if hit.excerpt:
+            entry += f"\n   {hit.excerpt}"
+        if lines and used + len(entry) + 1 > budget:
+            break
+        lines.append(entry)
+        used += len(entry) + 1
+    return "\n".join(lines), len(lines)
+
+
+async def tool_obsidian_search(args: dict) -> str:
+    """Candidate notes, best first, each with one line of context. Never a
+    whole note: `obsidian_read` is how the brain opens the one it wants."""
+    try:
+        result = await asyncio.to_thread(
+            obsidian_vault.search, str(args.get("query") or ""),
+            str(args.get("path") or ""),
+            args.get("limit") or obsidian_vault.SEARCH_DEFAULT_LIMIT)
+    except obsidian_vault.VaultError as e:
+        return _safe_label(str(e), _OBSIDIAN_SAID_LIMIT)
+    # The query is not echoed, for `search_repo`'s reason: the brain knows
+    # what it asked.
+    partial = (" (the vault is larger than one search reads, so this is "
+               "only part of it)") if result.truncated else ""
+    if not result.hits:
+        return f"Nothing in the Obsidian vault matches that, sir{partial}."
+    body, shown = _obsidian_search_lines(result.hits)
+    noun = "note" if shown == 1 else "notes"
+    return (f"{_say_number(shown).capitalize()} {noun} from the Obsidian vault, best match "
+            f"first{partial}. Open one with obsidian_read only if this is not "
+            f"enough:\n{_wrap_untrusted(_OBSIDIAN_SEARCH_WRAP_NAME, body)}")
+
+
 TOOL_HANDLERS.update({
     "obsidian_create_folder": tool_obsidian_create_folder,
     "obsidian_create_note": tool_obsidian_create_note,
     "obsidian_append": tool_obsidian_append,
     "obsidian_read": tool_obsidian_read,
+    "obsidian_search": tool_obsidian_search,
 })
 ACTING_TOOLS.update({"obsidian_create_folder", "obsidian_create_note",
                      "obsidian_append"})
