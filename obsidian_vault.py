@@ -104,7 +104,7 @@ def _resolve(relative: str, *, note: bool) -> tuple[Path, Path]:
         if last.lower().endswith(NOTE_SUFFIX):
             pass
         elif _has_foreign_extension(last):
-            raise VaultError("Only Markdown notes, sir; that is not a .md file.")
+            raise VaultError("Only Markdown notes, sir: that is not a .md file.")
         else:
             last += NOTE_SUFFIX
         if last.lower() == NOTE_SUFFIX:

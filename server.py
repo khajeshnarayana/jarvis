@@ -6331,15 +6331,21 @@ ACTING_TOOLS.update({"remember", "project_note", "write_journal"})
 # turn the user is driving, and not after the turn has read something foreign
 # (a web page cannot make JARVIS write into the vault). The reader taints:
 # the vault holds whatever the user ever clipped into it.
+#
+# What the vault module says back names the path the brain asked for, so it
+# goes through `_safe_label` before it reaches a line the brain reads as
+# JARVIS's own (tests/test_tool_argument_echo.py).
 
 _OBSIDIAN_WRAP_NAME = "obsidian note"
+_OBSIDIAN_SAID_LIMIT = 240
 
 
 def _obsidian_call(action, *args) -> str:
     try:
-        return action(*args)
+        said = action(*args)
     except obsidian_vault.VaultError as e:
-        return str(e)
+        said = str(e)
+    return _safe_label(said, _OBSIDIAN_SAID_LIMIT)
 
 
 def tool_obsidian_create_folder(args: dict) -> str:
