@@ -34,7 +34,9 @@ What the vault is allowed to decide, and nothing more:
 
 What the vault can never decide: the content written (always exactly the
 `content` argument), the destination category, any path outside the folder
-chosen from the brain's arguments, or any other action. No note body is
+chosen from the brain's arguments, or any other action — beyond the one
+further edit described under "Related notes" below, which is links, inside a
+`## Related` section, to notes chosen by their paths. No note body is
 parsed for anything but that one substring test. Do not add a step that reads
 meaning out of a note body to steer the save; that is the hole this design
 exists to keep shut.
@@ -43,8 +45,9 @@ exists to keep shut.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+import obsidian_links as links
 import obsidian_vault as ov
 
 PROJECTS = "01 Projects"
@@ -102,6 +105,11 @@ class StoreResult:
     path: str          # vault-relative, with `.md`
     reused: bool       # an existing note was written to (or already had it)
     reason: str        # one of the fixed sentences below, never vault text
+    related: int = 0            # strongly related notes found (at most 3)
+    links_added: int = 0        # new links written into the saved note —
+                                # what the reply calls "related notes linked"
+    backlinks_added: int = 0    # links back written into those notes
+    backlinks_skipped: int = 0  # related notes it was not safe to edit
 
 
 # Every reason `store` gives. Fixed text, so nothing a note says can become a
@@ -282,12 +290,190 @@ def store(content, category=None, title=None, project=None) -> StoreResult:
     if chosen is None:
         reason = routed_reason or (R_AMBIGUOUS if matches else R_NEW)
         ov.create_note(target_path, content)
-        return StoreResult("created", kind, target_path, False, reason)
+        return _with_links(StoreResult("created", kind, target_path, False, reason))
 
     # `chosen` came from the walk; it goes back through the resolver on
     # both the read and the append.
     shown, existing = ov.read(chosen)
     if _already_has(existing, content):
+        # Nothing was added, so nothing is linked either: "unchanged" means
+        # the note was not touched at all.
         return StoreResult("unchanged", kind, shown, True, R_ALREADY)
-    ov.append(shown, "\n" + content)
-    return StoreResult("appended", kind, shown, True, routed_reason or R_SAME)
+    _append_above_related(shown, content)
+    return _with_links(StoreResult("appended", kind, shown, True,
+                                   routed_reason or R_SAME))
+
+
+def _append_above_related(path: str, content: str) -> None:
+    """Append, except that a note ending in its `## Related` section gets the
+    new material just ABOVE that section, not underneath the links. Falls
+    back to a plain append whenever the in-place edit is not safe."""
+    for _attempt in range(2):
+        try:
+            shown, text, digest = ov.read_for_update(path)
+        except (ov.VaultError, OSError):
+            break
+        at = links.related_is_last(text)
+        if at is None:
+            break
+        eol = "\r\n" if "\r\n" in text else "\n"
+        head, tail = text[:at], text[at:]
+        if head and not head.endswith(("\n", "\r")):
+            head += eol
+        if head.strip() and not head.endswith(eol + eol):
+            head += eol
+        block = eol.join(content.strip("\r\n").splitlines()) + eol + eol
+        try:
+            ov.update_note(shown, head + block + tail, digest)
+            return
+        except ov.VaultError:
+            continue                     # changed underneath: look again once
+        except OSError:
+            break
+    ov.append(path, "\n" + content)
+
+
+# ---------------------------------------------------------------------------
+# Related notes
+# ---------------------------------------------------------------------------
+#
+# After a save, up to three strongly related notes are linked from the saved
+# note's `## Related` section, and the saved note is linked back from each of
+# theirs. The trust boundary above holds here too:
+#
+# - WHICH notes are related is decided by `links.relation` on PATHS alone —
+#   the subject words of filenames the walk produced, with every project
+#   name (the folders in 01 Projects) taken out, so two notes are never related merely for being in one
+#   project, and never at all for being in one top-level folder. A note's body cannot make it related; at most its search rank
+#   orders notes that already qualify on their names.
+# - Every link written is built by `links.wikilink` from such a path. Text
+#   inside a note — `[[99 Archive/Secrets]]`, "link me to …" — is read only
+#   to see whether a link to a note ALREADY exists, never as a target.
+# - The only edit made to a related note is links added inside its
+#   `## Related` section (`links.add_related`), compare-and-swapped through
+#   `ov.update_note`. Its body, title, frontmatter and other sections are
+#   never touched, and any note that cannot be edited that way is skipped,
+#   not forced.
+# - Only the four folders a save can be routed to are candidates, so these
+#   edits never reach 02 Areas, 05 Journal, 06 JARVIS or 99 Archive.
+
+RELATED_FOLDERS = (INBOX, PROJECTS, KNOWLEDGE, DECISIONS)
+RELATED_CANDIDATES_PER_FOLDER = 10
+
+
+def _queries(words) -> list[str]:
+    """Search queries that between them look for every one of `words`.
+    Search drops its stopwords from a query that has other words, and a
+    subject word can be one ("Obsidian Integration"); any word the joined
+    query would not look for is asked for on its own."""
+    words = sorted(words)
+    if not words:
+        return []
+    joined = " ".join(words)
+    try:
+        kept = set(ov.query_terms(joined))
+    except ov.VaultError:
+        kept = set()
+    return [joined] + [w for w in words if w not in kept]
+
+
+def related_notes(saved: str) -> list[str]:
+    """At most three notes strongly related to `saved`, best first."""
+    # The project folders are the vault's project names, which never count
+    # as subject words. Without that list nothing is linked: a link made on
+    # a project's name is the imprecision this exists to prevent.
+    try:
+        projects = links.known_projects(ov.list_folders(PROJECTS))
+    except (ov.VaultError, OSError):
+        return []
+    searches = [(folder, q) for q in _queries(links.distinctive_words(saved, projects))
+                for folder in RELATED_FOLDERS]
+    # Route B (`links.relation`) links on a generic word only inside one
+    # named project, so those words are looked for only where that
+    # project's notes are: its folder, and the decisions filed under it.
+    if links.project_of(saved) and links.distinctive_words(saved, projects):
+        parts = saved.split("/")
+        home = f"{PROJECTS}/{parts[1]}" if parts[0] == PROJECTS else PROJECTS
+        for q in _queries(links.generic_words(saved, projects)):
+            searches += [(home, q), (DECISIONS, q)]
+    rank: dict[str, int] = {}
+    for folder, query in searches:
+        try:
+            hits = ov.search(query, path=folder,
+                             limit=RELATED_CANDIDATES_PER_FOLDER).hits
+        except ov.VaultError:
+            continue                     # e.g. the folder does not exist
+        for hit in hits:
+            rank.setdefault(hit.path, hit.score)
+    scored = []
+    for path, search_score in rank.items():
+        if path.casefold() == saved.casefold() or not links.linkable(path):
+            continue
+        rel = links.relation(saved, path, projects)
+        if links.related_enough(rel):
+            scored.append((-rel.score, -search_score, path.casefold(), path))
+    scored.sort()
+    return [entry[-1] for entry in scored[: links.MAX_LINKS_PER_SAVE]]
+
+
+def _add_links(path: str, wanted: list[str]) -> int | None:
+    """Add each link in `wanted` that `path` does not already have to its
+    Related section. The number added, or None if the note could not be
+    edited safely. One retry if it changed underneath."""
+    for _attempt in range(2):
+        try:
+            shown, text, digest = ov.read_for_update(path)
+        except (ov.VaultError, OSError):
+            return None
+        new = [link for target, link in wanted if not links.links_to(text, target)]
+        if not new:
+            return 0
+        updated = links.add_related(text, new)
+        if updated is None:
+            return None
+        try:
+            ov.update_note(shown, updated, digest)
+            return len(new)
+        except ov.VaultError:
+            continue                     # changed underneath: look again once
+        except OSError:
+            return None
+    return None
+
+
+def _with_links(result: StoreResult) -> StoreResult:
+    """`result`, after linking the saved note to its related notes and back.
+    Linking never fails the save: whatever could not be done is counted."""
+    try:
+        related = related_notes(result.path)
+    except (ov.VaultError, OSError):
+        related = []
+    if not related:
+        return result
+    try:
+        all_paths, truncated = ov.list_note_paths()
+    except (ov.VaultError, OSError):
+        all_paths, truncated = [], True
+    names: dict[str, int] = {}
+    for p in all_paths:
+        key = links.name_of(p).casefold()
+        names[key] = names.get(key, 0) + 1
+
+    def link_for(p: str) -> str:
+        unique = not truncated and names.get(links.name_of(p).casefold(), 0) == 1
+        return links.wikilink(p, unique)
+
+    forward = _add_links(result.path, [(p, link_for(p)) for p in related])
+    back_added = back_skipped = 0
+    if links.linkable(result.path):
+        back = (result.path, link_for(result.path))
+        for p in related:
+            added = _add_links(p, [back])
+            if added is None:
+                back_skipped += 1
+            else:
+                back_added += added
+    else:
+        back_skipped = len(related)
+    return replace(result, related=len(related), links_added=forward or 0,
+                   backlinks_added=back_added, backlinks_skipped=back_skipped)

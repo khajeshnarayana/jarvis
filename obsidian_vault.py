@@ -19,8 +19,10 @@ Refused, never repaired: `../evil` is an error, not `evil`.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import secrets
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +102,20 @@ def _resolve(relative: str, *, note: bool) -> tuple[Path, Path]:
     The target need not exist yet, so the deepest ancestor that does is
     resolved and the rest is re-attached: a missing tail has no symlinks.
     """
+    root, parts = _lexical(relative, note=note)
+    candidate = root.joinpath(*parts)
+    existing = candidate
+    tail: list[str] = []
+    while not os.path.lexists(existing) and existing != root:
+        tail.append(existing.name)
+        existing = existing.parent
+    real = Path(os.path.realpath(existing)).joinpath(*reversed(tail))
+    _check_real(root, real)
+    return root, real
+
+
+def _lexical(relative: str, *, note: bool) -> tuple[Path, list[str]]:
+    """(vault root, the path's components as written, `.md` added for a note)."""
     root = vault_root()
     parts = _parts(relative)
     if note:
@@ -113,16 +129,7 @@ def _resolve(relative: str, *, note: bool) -> tuple[Path, Path]:
         if last.lower() == NOTE_SUFFIX:
             raise VaultError("A note needs a name.")
         parts[-1] = last
-
-    candidate = root.joinpath(*parts)
-    existing = candidate
-    tail: list[str] = []
-    while not os.path.lexists(existing) and existing != root:
-        tail.append(existing.name)
-        existing = existing.parent
-    real = Path(os.path.realpath(existing)).joinpath(*reversed(tail))
-    _check_real(root, real)
-    return root, real
+    return root, parts
 
 
 def _shown(root: Path, path: Path) -> str:
@@ -216,6 +223,103 @@ def list_folders(path: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Updating a note in place — internal only
+# ---------------------------------------------------------------------------
+#
+# Not a tool. The organizer uses it to add links to a `## Related` section,
+# and nothing else may: there is no MCP route to whole-note replacement.
+#
+# Compare-and-swap: the caller reads the note and its digest, builds the new
+# text, and hands both back. The note is re-read immediately before the swap
+# and the write is refused if a single byte changed, so an edit the user made
+# in Obsidian in between is never overwritten. The new text goes to a hidden
+# temporary file in the same folder and is moved over the note with
+# `os.replace`, which is atomic: a reader sees the old note or the new one,
+# never half of either.
+#
+# Stricter than `read`: a note reached through ANY symlink is refused, even
+# one that stays inside the vault, and so is one that is not valid UTF-8 —
+# `read` decodes with replacement characters, and writing that text back
+# would destroy the bytes it could not decode.
+
+
+def _note_for_update(path: str) -> tuple[Path, Path]:
+    root, parts = _lexical(path, note=True)
+    lexical = root.joinpath(*parts)
+    _resolve(path, note=True)                      # the usual containment
+    if os.path.realpath(lexical) != str(lexical):
+        raise VaultError("That note is reached through a link, so I will not edit it.")
+    if not lexical.is_file():
+        raise VaultError(f"There is no note at {_shown(root, lexical)}.")
+    return root, lexical
+
+
+def _read_bytes(target: Path) -> bytes:
+    fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as f:
+        if os.fstat(f.fileno()).st_size > MAX_READ_BYTES:
+            raise VaultError("That note is too large to edit.")
+        return f.read(MAX_READ_BYTES + 1)
+
+
+def read_for_update(path: str) -> tuple[str, str, str]:
+    """(vault-relative path, the note's text, the digest `update_note` wants)."""
+    root, target = _note_for_update(path)
+    data = _read_bytes(target)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise VaultError("That note is not plain UTF-8, so I will not edit it.") from None
+    return _shown(root, target), text, hashlib.sha256(data).hexdigest()
+
+
+def update_note(path: str, text: str, expected_digest: str) -> str:
+    """Replace a note's text, only if it is still exactly what was read."""
+    root, target = _note_for_update(path)
+    data = text.encode("utf-8")
+    if len(data) > MAX_READ_BYTES:
+        raise VaultError("That would make the note too large.")
+    if hashlib.sha256(_read_bytes(target)).hexdigest() != expected_digest:
+        raise VaultError("That note changed while I was working on it, so I left it alone.")
+    mode = target.stat().st_mode & 0o777
+    tmp = target.with_name(f".{target.name}.jarvis-{secrets.token_hex(6)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        # Once more, as late as possible: the window left is the length of
+        # one `os.replace`.
+        if hashlib.sha256(_read_bytes(target)).hexdigest() != expected_digest:
+            raise VaultError("That note changed while I was working on it, so I left it alone.")
+        os.replace(tmp, target)
+    finally:
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+    return _shown(root, target)
+
+
+def list_note_paths() -> tuple[list[str], bool]:
+    """(every visible note's vault-relative path, sorted; whether a bound cut
+    the walk short). Same rules and bounds as `search`'s walk."""
+    root = vault_root()
+    paths: list[str] = []
+    entries = 0
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for name in sorted(filenames):
+            entries += 1
+            if entries > SEARCH_MAX_ENTRIES:
+                return sorted(paths), True
+            if (name.startswith(".") or not name.lower().endswith(NOTE_SUFFIX)
+                    or name.lower() == NOTE_SUFFIX):
+                continue
+            paths.append(_shown(root, Path(dirpath) / name))
+    return sorted(paths), False
+
+
+# ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------
 #
@@ -293,6 +397,12 @@ def _query_terms(query: str) -> list[str]:
     if not terms:
         raise VaultError("What should I look for in the vault?")
     return terms
+
+
+def query_terms(query: str) -> list[str]:
+    """The words `search` will actually look for in `query`: stopwords are
+    dropped unless nothing else is left, and at most MAX_QUERY_TERMS kept."""
+    return _query_terms(query)
 
 
 def _matches(term: str, token: str) -> bool:

@@ -6428,7 +6428,9 @@ async def tool_obsidian_search(args: dict) -> str:
 # is the same work done without the brain ever seeing the vault, which is
 # why it needs no exemption from anything. Keep it that way: nothing below
 # may put note text, or a vault path the organizer did not build from these
-# arguments, into the reply.
+# arguments, into the reply. That is why related notes are reported as
+# COUNTS: their names are the vault's own filenames, which would be foreign
+# text in a turn nothing has marked as having read any.
 _STORE_SAID = {
     "created": "Saved to a new note in the Obsidian vault, sir.",
     "appended": "Added to an existing note in the Obsidian vault, sir.",
@@ -6450,6 +6452,9 @@ async def tool_obsidian_store(args: dict) -> str:
             f"category: {_plain_name(result.category, 'unknown')}\n"
             f"path: {_safe_label(result.path, _OBSIDIAN_SAID_LIMIT)}\n"
             f"existing note: {'yes' if result.reused else 'no'}\n"
+            f"related notes linked: {int(result.links_added)}\n"
+            f"backlinks added: {int(result.backlinks_added)}\n"
+            f"backlinks skipped: {int(result.backlinks_skipped)}\n"
             f"reason: {_safe_label(result.reason, _OBSIDIAN_SAID_LIMIT)}")
 
 
